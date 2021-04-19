@@ -1,0 +1,49 @@
+#!/usr/bin/env python3.7
+
+import pandas as pd
+import os
+from statsmodels.tsa.seasonal import (STL, seasonal_decompose)
+from datetime import datetime
+from statsmodels.tsa.stattools import adfuller
+
+
+
+path = 'path'
+rel_path = 'data.csv'
+
+df = pd.read_csv(os.path.join(path, rel_path), parse_dates=['dt'])
+
+ctg = ['cgt1', 'ctg2']
+for ind in df['ind'].unique():
+    for q in range(1,5):
+        df_qtr = df[(df['qtr']==q) & (df['ind']==ind)]
+        wk_idx = pd.DataFrame(df_qtr['wk'].sort_values().unique(), columns=['dt_idx'])
+        mth_idx = pd.DataFrame(df_qtr['mth'].sort_values().unique(), columns=['dt_idx'])
+        wk_avg = pd.DataFrame()
+        mth_avg = pd.DataFrame()
+        time = {'wk': [wk_idx, 'wk', 6], 'mth': [mth_idx, 'mth', 2]}
+        for t in time.keys():
+            for c in category:
+                ss_loess = pd.DataFrame()
+                ss_mul = pd.DataFrame()
+                for ctg in df_qtr['ctg2'][df_qtr['ctg']==c].unique(): 
+                    cat = df_qtr[[t, 'col1']][df_qtr['ctg2']==ctg].sort_values(t).groupby(t).mean()
+                    if len(cat) >= 2:
+                        try:
+                            cat = time[t][0].merge(cat.reset_index(), how='left', left_on='dt_idx', right_on=t).drop(t, axis=1).interpolate(method='polynomial', order=2).set_index('dt_idx')
+                        except:
+                            cat = time[t][0].merge(cat.reset_index(), how='left', left_on='dt_idx', right_on=t).drop(t, axis=1).interpolate(method='slinear').set_index('dt_idx')
+                        cat[cat['col1']<0] = 1
+                        cat.fillna(1, inplace=True)
+                        adf = adfuller(cat, autolag='AIC')
+                        if adf[0] > adf[4]['5%']:
+                            loess = STL(cat, period = time[t][2]).fit()
+                            mul = seasonal_decompose(cat, model='mult', extrapolate_trend='freq', period = time[t][2])
+                        else:
+                            print('{} is stationary and does not have a seasonal component.'.format(ctg))
+                        ss_loess[ctg] = loess.seasonal
+                        ss_mul[ctg] = mul.seasonal
+                        if t == 'wk':
+                            wk_avg[ctg] = cat['col1']
+                        elif t == 'mth':
+                            mth_avg[ctg] = cat['col1']
