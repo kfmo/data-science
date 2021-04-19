@@ -1,0 +1,43 @@
+#!/usr/bin/env python3.7
+
+import pandas as pd
+import os
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+
+
+path = 'path'
+rel_path = 'file.xlsx'
+sht = 'sheet'
+ctg = 'file2.xlsx'
+
+df = pd.read_excel(os.path.join(path, rel_path), sheet_name=sht)
+
+df['group'] = None
+
+grp = [grps]
+
+vectorizer = CountVectorizer(analyzer='word')
+# vectorizer = TfidfVectorizer(analyzer='word')
+idxd = []
+for p in range(len(grp)):
+    g = grp.copy()
+    del g[p]
+    kys = np.array(list(df[['col1', 'col2']][(df['col1'].str.contains(grp[p], case=False)==True) & (~df['col1'].str.contains('|'.join(g), case=False)==True)].groupby('col1').groups.keys()))
+    vec = pd.DataFrame(vectorizer.fit_transform(kys).todense(), columns=vectorizer.get_feature_names())
+
+    mx = vec.sum(axis=1).sort_values(ascending=False).unique()
+    for m in mx:
+        idx = vec[vec.sum(axis=1)==m].index
+        for i in idx:
+            if i not in idxd:
+                idxd.append(i)
+                ls = vec[vec>0].loc[i].dropna().index.tolist()
+                sm = vec.filter(items=ls, axis=1).sum(axis=1).drop(labels=i).sort_values(ascending=False)
+                ct = vec.filter(items=ls, axis=1)[vec>0].count(axis=1).drop(labels=i).sort_values(ascending=False)
+                idx_sum = sm[sm>m*0.9]
+                idx_cnt = ct[ct>m*0.5]
+                idx_ovl = [ix for ix in idx_sum if ix in idx_cnt]
+                if len(idx_ovl) > 1:
+                    df['group'][(df['group'].isna()) & (df['col1'].str.contains('|'.join(kys[idx_ovl]), case=False)==True)] = kys[i]
+                elif len(idx_ovl) == 1:
+                    df['group'][(df['group'].isna()) & (df['col1'].str.contains(kys[idx_ovl][0], case=False)==True)] = kys[i]
