@@ -1,0 +1,245 @@
+!# usr/bin/env python3.7
+
+import pandas as pd
+import os
+import spacy
+import unicodedata
+import string
+import re
+
+
+path = 'path'
+rel_path = 'file.xlsx'
+sht = 'sheet'
+
+df = pd.read_excel(os.path.join(path, rel_path), sheet_name=sht)
+
+df['clctn'] = None
+
+nlp = spacy.load('en_core_web_sm')
+phrase_matcher1 = spacy.matcher.PhraseMatcher(nlp.vocab)
+clctn_matcher1 = spacy.matcher.PhraseMatcher(nlp.vocab)
+phrase_matcher2 = spacy.matcher.PhraseMatcher(nlp.vocab)
+yr_matcher = spacy.matcher.Matcher(nlp.vocab)
+clctn_matcher2 = spacy.matcher.Matcher(nlp.vocab)
+n_matcher = spacy.matcher.Matcher(nlp.vocab)
+matcher1 = spacy.matcher.Matcher(nlp.vocab)
+matcher2 = spacy.matcher.Matcher(nlp.vocab)
+
+in_mfr = ['bmw', 'honda']
+in_clctn = ['accord', '3 series', 'type r', 'm series']
+in_sw = ['abs', 'premium']
+ex_sw = ['w/', 'new', 'new-', '-new', 'shipping', 'free', 'factory', 'sealed', 'all', 'us', 'germany', 'japan']
+ex_le = ['must', 'fast']
+
+pattern = [nlp.make_doc(text) for text in in_mfr]
+phrase_matcher1.add('incl_mfr', None, *pattern)
+pattern = [nlp.make_doc(text) for text in in_clctn]
+clctn_matcher1.add('incl_clctn', None, *pattern)
+pattern = [nlp.make_doc(text) for text in in_sw]
+phrase_matcher2.add('incl_sw', None, *pattern)
+pattern = [{'TEXT': {'REGEX': '19\d\d'}}]
+yr_matcher.add('twentieth', None, pattern)
+pattern = [{'TEXT': {'REGEX': '20\d\d'}}]
+yr_matcher.add('twenty-first', None, pattern)
+pattern = [{'TEXT': {'REGEX': '19\d\d'}}, {'TEXT': {'REGEX': '/'}}, {'TEXT': {'REGEX': '\d\d'}}]
+yr_matcher.add('twentieth1', None, pattern)
+pattern = [{'TEXT': {'REGEX': '20\d\d'}}, {'TEXT': {'REGEX': '/'}}, {'TEXT': {'REGEX': '\d\d'}}]
+yr_matcher.add('twenty-first1', None, pattern)
+pattern = [{'TEXT': {'REGEX': '19\d\d'}}, {'TEXT': {'REGEX': '/'}}, {'TEXT': {'REGEX': '19\d\d'}}]
+yr_matcher.add('twentieth2', None, pattern)
+pattern = [{'TEXT': {'REGEX': '20\d\d'}}, {'TEXT': {'REGEX': '/'}}, {'TEXT': {'REGEX': '20\d\d'}}]
+yr_matcher.add('twenty-first2', None, pattern)
+pattern = [{'TEXT': {'REGEX': '19\d\d'}}, {'TEXT': {'REGEX': '-'}}, {'TEXT': {'REGEX': '\d\d'}}]
+yr_matcher.add('twentieth3', None, pattern)
+pattern = [{'TEXT': {'REGEX': '20\d\d'}}, {'TEXT': {'REGEX': '-'}}, {'TEXT': {'REGEX': '\d\d'}}]
+yr_matcher.add('twenty-first3', None, pattern)
+pattern = [{'TEXT': {'REGEX': '19\d\d'}}, {'TEXT': {'REGEX': '-'}}, {'TEXT': {'REGEX': '19\d\d'}}]
+yr_matcher.add('twentieth4', None, pattern)
+pattern = [{'TEXT': {'REGEX': '20\d\d'}}, {'TEXT': {'REGEX': '-'}}, {'TEXT': {'REGEX': '20\d\d'}}]
+yr_matcher.add('twenty-first4', None, pattern)
+pattern = [{'TEXT': {'REGEX': '19\d\d'}}, {'TEXT': {'REGEX': '/'}}, {'TEXT': {'REGEX': '20\d\d'}}]
+yr_matcher.add('twentieth_twenty-first', None, pattern)
+pattern = [{'TEXT': {'REGEX': '19\d\d'}}, {'TEXT': {'REGEX': '-'}}, {'TEXT': {'REGEX': '20\d\d'}}]
+yr_matcher.add('twentieth_twenty-first1', None, pattern)
+pattern = [{'TEXT': {'REGEX': '\w*'}}, {'TEXT': {'REGEX': '325'}}, {'TEXT': {'REGEX': '*\w'}}]
+clctn_matcher2.add('325', None, pattern)
+pattern = [{'POS': {'IN': ['NOUN', 'PROPN']}}, {'TEXT': 'and'}, {'POS': {'IN': ['NOUN', 'PROPN']}}]
+n_matcher.add('and', None, pattern)
+pattern = [{'POS': 'PROPN'}]
+n_matcher.add('pronoun', None, pattern)
+pattern = [{'POS': 'NOUN'}]
+n_matcher.add('noun', None, pattern)
+pattern = [{'TEXT': {'NOT_IN': ex_sw}}]
+matcher1.add('excl_sw', None, pattern)
+pattern = [{'LEMMA': {'NOT_IN': ex_le}}]
+matcher2.add('excl_le', None, pattern)
+
+p = string.punctuation[:5] + string.punctuation[6:12] + string.punctuation[13] + string.punctuation[15:]
+for c in df['col1'].unique():
+    idx = grp.get_group(c).index
+    if len(df['clctn'][(df.index.isin(idx)) & (df['clctn'].isna())]) > 0:
+        s = ' '.join(re.sub(r'[a-z]+\s*\d+', '', re.sub(r'\d+\s*[a-z]+', '', grp.get_group(c)['col2'].loc[idx[0]].lower().strip())).replace('&', ' and ').split())
+        
+        if '325-is' in s:
+            s = s.replace('-', '')
+        elif '325 is' in s:
+            s = s.replace('325 is', '325is')
+                
+        doc = nlp(unicodedata.normalize('NFD', s).encode('ascii', 'ignore').decode('utf-8').translate(str.maketrans('/', '-', p)))
+        dtxt = doc.text
+        for i in range(len(in_clctn)):
+            if f' {in_clctn[i]} ' in f' {dtxt} ' and 'storage' not in dtxt:
+                new_doc = ''
+                for match in re.finditer(in_clctn[i], dtxt):
+                    start, end = match.span()
+                    span = doc.char_span(start, end)
+                    new_doc = span.text + ' ' + doc.text
+                    
+                doc = nlp(new_doc)
+                dtxt = doc.text.lower().strip()
+                matches = clctn_matcher1(doc)
+                
+                clctn_doc1 = ''
+                for id, start, end in matches:
+                    ent = spacy.tokens.Span(doc, start, end)
+                    if f' {ent.text.lower()} ' not in f' {clctn_doc1} ':
+                        clctn_doc1 += ent.text.lower() + ' '
+                        
+                matches = phrase_matcher2(doc)
+                
+                try:
+                    phr_doc2 = ''
+                    for id, start, end in matches:
+                        ent = spacy.tokens.Span(doc, start, end)
+                        if f' {ent.text.lower()} ' not in f' {phr_doc2} ':
+                            phr_doc2 += ent.text.lower() + ' '
+                except:
+                    pass
+                        
+                matches = yr_matcher(doc)
+                
+                yr_doc = ''
+                for id, start, end in matches:
+                    ent = spacy.tokens.Span(doc, start, end)
+                    if f' {ent.text.lower()} ' not in f' {yr_doc} ':
+                        yr_doc += ent.text.lower() + ' '
+                        
+                new_doc = ''
+                if len(phr_doc2) > 0:
+                    for match in re.finditer(f'({clctn_doc1.split()[0]}.*{phr_doc2.split()[-1]})', dtxt):
+                        start, end = match.span()
+                        new_doc = dtxt[start:end]
+                else:
+                    for match in re.finditer(f'({clctn_doc1.split()[0]}.*)', dtxt):
+                        start, end = match.span()
+                        new_doc = dtxt[start:end]
+                        
+                doc = nlp(new_doc)
+                matches1 = matcher1(doc)
+                
+                new_doc = ''
+                for id, start, end in matches1:
+                    ent = spacy.tokens.Span(doc, start, end)
+                    if f' {ent.text.lower()} ' not in f' {new_doc} ':
+                        new_doc += ent.text.lower() + ' '
+                        
+                doc = nlp(new_doc)
+                matches2 = matcher2(doc)
+                
+                new_doc = yr_doc
+                for id, start, end in matches2:
+                    ent = spacy.tokens.Span(doc, start, end)
+                    if f' {ent.text.lower()} ' not in f' {new_doc} ':
+                        new_doc += ent.text.lower() + ' '
+                        
+                df['clctn'].loc[idx] = ' '.join('-'.join(new_doc.split(' - ')).split())
+                
+                break
+
+            elif in_clctn[i] == in_clctn[-1] and f' {in_clctn[i][0]} ' not in f' {dtxt} ' or f' {in_clctn[i][1]} ' not in f' {dtxt} ' or 'storage' in dtxt:
+                matches = phrase_matcher1(doc)
+                
+                phr_doc1 = ''
+                for id, start, end in matches:
+                    ent = spacy.tokens.Span(doc, start, end)
+                    if f' {ent.text.lower()} ' not in f' {phr_doc1} ':
+                        phr_doc1 += ent.text.lower() + ' '
+                        
+                matches = clctn_matcher1(doc)
+                
+                clctn_doc1 = ''
+                for id, start, end in matches:
+                    ent = spacy.tokens.Span(doc, start, end)
+                    if f' {ent.text.lower()} ' not in f' {clctn_doc1} ':
+                        clctn_doc1 += ent.text.lower() + ' '
+                        
+                matches = clctn_matcher2(doc)
+                
+                clctn_doc2 = ''
+                for id, start, end in matches:
+                    ent = spacy.tokens.Span(doc, start, end)
+                    if f' {ent.text.lower()} ' not in f' {clctn_doc2} ':
+                        clctn_doc2 += ent.text.lower() + ' '
+                        
+                matches = phrase_matcher2(doc)
+                
+                phr_doc2 = ''
+                for id, start, end in matches:
+                    ent = spacy.tokens.Span(doc, start, end)
+                    if f' {ent.text.lower()} ' not in f' {phr_doc2} ':
+                        phr_doc2 += ent.text.lower() + ' '
+
+                matches = yr_matcher(doc)
+                
+                yr_doc = ''
+                for id, start, end in matches:
+                    ent = spacy.tokens.Span(doc, start, end)
+                    if f' {ent.text.lower()} ' not in f' {yr_doc} ':
+                        yr_doc += ent.text.lower() + ' '
+                        
+                matches = n_matcher(doc)
+                
+                new_doc = ''
+                for id, start, end in matches:
+                    ent = spacy.tokens.Span(doc, start, end)
+                    if f' {ent.text.lower()} ' not in f' {new_doc} ':
+                        new_doc += ent.text.lower() + ' '
+                
+                doc = nlp(new_doc)
+                matches1 = matcher1(doc)
+                
+                new_doc = ''
+                for id, start, end in matches1:
+                    ent = spacy.tokens.Span(doc, start, end)
+                    if f' {ent.text.lower()} ' not in f' {new_doc} ':
+                        new_doc += ent.text.lower() + ' '
+                        
+                doc = nlp(new_doc)
+                matches2 = matcher2(doc)
+                
+                new_doc = ''
+                for id, start, end in matches2:
+                    ent = spacy.tokens.Span(doc, start, end)
+                    if f' {ent.text.lower()} ' not in f' {new_doc} ':
+                        new_doc += ent.text.lower() + ' '
+                
+                new_doc = re.sub('(?=abs).*', '', new_doc)
+                new_doc = re.sub('(?=\sabs\s).*', '', new_doc)
+                new_doc = re.sub('(?=premium).*', '', new_doc)
+                new_doc = re.sub('(?=\spremium\s).*', '', new_doc)
+                
+                new_doc = yr_doc + ' ' + phr_doc1 + ' ' + clctn_doc1 + ' ' + clctn_doc2 + ' ' + new_doc + ' ' + phr_doc2
+                doc = nlp(new_doc)
+                
+                new_doc = ''
+                for start in range(len(doc)):
+                    ent = spacy.tokens.Span(doc, start, start+1)
+                    if f' {ent.text.lower()} ' not in f' {new_doc} ':
+                        new_doc += ent.text.lower() + ' '
+                        
+                df['clctn'].loc[idx] = ' '.join('-'.join(new_doc.split(' - ')).split())
+                
+                break
+
+df.to_excel(os.path.join(path, 'file.xlsx'), index=False)
