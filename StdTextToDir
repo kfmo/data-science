@@ -1,0 +1,106 @@
+#!/usr/bin/env python3.9
+
+import pandas as pd
+import string
+import re
+
+
+txt = """root
+|-- id: string (nullable = true)
+|-- madeupField: randomtype (nullable = true)
+|-- sourceMetadata: struct (nullable = false)
+|    |-- createdBy: string (nullable = true)
+|    |-- createdDate: string (nullable = true)
+|    |-- language: string (nullable = true)
+|    |-- sourcePropertyNumber: string (nullable = true)
+|    |-- sourceSystem: string (nullable = true)
+|    |-- updatedBy: string (nullable = true)
+|    |-- updatedDate: string (nullable = true)
+|-- addresses: array (nullable = true)
+|    |-- element: struct (containsNull = true)
+|    |    |-- addressLine1: string (nullable = true)
+|    |    |-- addressLine2: string (nullable = true)
+|    |    |-- addressLine3: string (nullable = true)
+|    |    |-- addressLine4: string (nullable = true)
+|    |    |-- addressStatus: string (nullable = true)
+|    |    |-- addressUsageType: string (nullable = true)
+|    |    |-- city: string (nullable = true)
+|    |    |-- addressGeolocation: struct (nullable = false)
+|    |    |    |-- geoLatitude: double (nullable = true)
+|    |    |    |-- geoLongitude: double (nullable = true)
+|    |    |    |-- sourceGeoLocation: string (nullable = true)
+|-- isDeleted: bool (nullable = false)"""
+
+# Process raw text to remove unnecessary punctuation and words, and generate ordered dataframe
+s = ' '.join(txt.split('\n'))
+p = string.punctuation[:7] + string.punctuation[9:]
+
+a = [i for i in txt.translate(txt.maketrans('', '', p)).split() \
+    if re.search(r'\S+(?=\))|(?<=\()\S+', i) is None]
+df_txt = pd.DataFrame(a[1:])
+df_loc = df_txt.iloc[::2].reset_index(drop=True)
+df_dtype = df_txt.iloc[1::2].reset_index(drop=True)
+df_txt = df_loc.merge(df_dtype, how='inner', left_index=True, right_index=True)
+df_txt.columns = ['loc', 'dtype']
+df_txt[['path', 'parent_path', 'lvl', 'parent_lvl']] = None
+df_txt.loc[len(df_txt),:] = [None, None, None, None, None, None]
+df_txt = df_txt.shift(periods=1)
+df_txt.loc[0,:] = ['root', None, 0, None, 0, None]
+
+# Generate and loop through list of keywords
+d = ['string', 'randomtype', 'struct', 'double', 'bool', 'array']
+a = [i for i in a if i not in d]
+
+r = list()
+
+n = 1
+while len(a[1:]) > 0:
+    s1 = [i for i in re.findall(r'(?<!\|(?:\s{4}\|){' + str(n) + '}\-{2}\s{1})\w+(?=\:)', s) \
+        if i in a and i not in r]
+
+    # Label with primary and secondary keys
+    df_txt['path'][df_txt['loc'].isin(s1)] = [i+1 for i in range(len(s1))]
+    df_txt['lvl'][df_txt['loc'].isin(s1)] = n
+    df_txt['parent_lvl'][df_txt['loc'].isin(s1)] = n-1
+
+    a = [i for i in a if i not in s1]
+    r.extend(s1)
+
+    n += 1
+
+# Flag and merge connections
+df_txt['nxt_lvl'] = df_txt['lvl'].iloc[:-1] - df_txt['lvl'].iloc[1:].reset_index(drop=True)
+for i in df_txt[df_txt['nxt_lvl']==-1].index:
+    df_txt['parent_path'].iloc[i:][df_txt['parent_lvl']==df_txt['lvl'].iloc[i]] = df_txt['path'].iloc[i]
+
+max_inherit = df_txt['lvl'].max()
+for i in range(max_inherit):
+    if i == 0:
+        df_path = df_txt.merge(df_txt[['loc', 'dtype', 'path', 'parent_path']] \
+            [df_txt['parent_lvl']==i], how='left', left_on='path', right_on='parent_path' \
+            , suffixes=['', '_child' + str(i)])
+    else:
+        df_path = df_path[df_path['loc']=='root'].merge(df_txt[['loc', 'dtype', 'path', 'parent_path']] \
+            [df_txt['parent_lvl']==i], how='left', left_on='path_child' + str(i-1), right_on='parent_path' \
+            , suffixes=['', '_child' + str(i)])
+
+# Generate (dir, dtype)
+r = list()
+dir_ls = list()
+for i in range(max_inherit):
+    if i < max_inherit-1:
+        idx = [ix for ix in df_path[df_path['path_child' + str(i+1)].isna()==True].index if ix not in r]
+        if len(idx) > 0:
+            df_dir = df_path.loc[idx, :'loc_child' + str(i)]
+            df_dir = df_dir[[c for c in df_dir.columns if 'loc' in c]]
+            tup_dir = list(zip(df_dir.apply(lambda x: '/'.join(x), axis=1), df_path.loc[idx, 'dtype_child' + str(i)]))
+    if i == max_inherit-1:
+        idx = [ix for ix in df_path[df_path['path_child' + str(i)].isna()==False].index if ix not in r]
+        if len(idx) > 0:
+            df_dir = df_path.loc[idx, :'loc_child' + str(i)]
+            df_dir = df_dir[[c for c in df_dir.columns if 'loc' in c]]
+            tup_dir = list(zip(df_dir.apply(lambda x: '/'.join(x), axis=1), df_path.loc[idx, 'dtype_child' + str(i)]))
+    r.extend(idx)
+    dir_ls.extend(tup_dir)
+
+print('List containing {} tuples of form (dir, dtype):\n{}'.format(len(dir_ls), dir_ls))
